@@ -1,53 +1,104 @@
-# app/services/vector_store.py
-import logging
-from typing import List, Optional
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_chroma import Chroma
-from langchain_core.documents import Document
+"""FAISS vector store for RAG fallback."""
 
-from app.config import DB_PATH, EMBEDDING_MODEL, RETRIEVAL_K
+from __future__ import annotations
+
+import logging
+import os
+from functools import lru_cache
+
+from langchain_community.document_loaders import Docx2txtLoader, TextLoader
+from langchain_community.vectorstores import FAISS
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-_embeddings = None
-_vector_db = None
 
-
-def get_vector_store() -> Chroma:
-    global _vector_db, _embeddings
-    if _vector_db is None:
-        logger.info("Initializing ChromaDB connection...")
-        _embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
-        _vector_db = Chroma(
-            persist_directory=DB_PATH,
-            embedding_function=_embeddings,
-        )
-    return _vector_db
-
-
-def retrieve_documents(
-    query: str,
-    category: Optional[str] = None,
-    k: int = RETRIEVAL_K,
-) -> List[Document]:
-    vector_db = get_vector_store()
-
-    search_kwargs = {"k": k}
-    if category and category != "general":
-        search_kwargs["filter"] = {"category": category}
-        logger.info(f"Retrieving top {k} docs for '{query}' filter={category!r}")
-    else:
-        logger.info(f"Retrieving top {k} docs for '{query}' (no filter)")
-
-    try:
-        # MMR gives diverse chunks instead of 5 near-duplicates
-        results = vector_db.max_marginal_relevance_search(
-            query,
-            fetch_k=max(k * 3, 15),
-            lambda_mult=0.5,
-            **search_kwargs,
-        )
-        return results
-    except Exception as e:
-        logger.error(f"Error during vector retrieval: {e}")
+def _load_documents(path: str):
+    """Load the RAG source with the loader matching its real type."""
+    if not os.path.exists(path):
+        logger.warning("RAG file not found: %s", path)
         return []
+
+    ext = os.path.splitext(path)[1].lower()
+
+    # docx
+    if ext == ".docx":
+        try:
+            loader = Docx2txtLoader(path)
+            docs = loader.load()
+            if docs and any(d.page_content.strip() for d in docs):
+                logger.info("Loaded .docx with %d document(s)", len(docs))
+                return docs
+            logger.warning(".docx loaded but yielded empty content.")
+        except Exception as e:
+            logger.error("Failed to load .docx (%s). Falling back to text loader.", e)
+        # try as text (some people rename .txt → .docx)
+        try:
+            loader = TextLoader(path, encoding="utf-8")
+            docs = loader.load()
+            if docs:
+                logger.info("Loaded as plain text (fallback).")
+                return docs
+        except Exception as e:
+            logger.error("Text fallback also failed: %s", e)
+            return []
+
+    # txt / md / anything else
+    try:
+        loader = TextLoader(path, encoding="utf-8")
+        return loader.load()
+    except Exception as e:
+        logger.error("Failed to load %s: %s", path, e)
+        return []
+
+
+@lru_cache(maxsize=1)
+def get_vectorstore() -> FAISS:
+    s = get_settings()
+    embeddings = HuggingFaceEmbeddings(model_name=s.embedding_model)
+
+    # Resolve the path: prefer .txt over .docx if both exist
+    path = s.document_path
+    base = os.path.splitext(path)[0]
+    candidates = [
+        path,
+        base + ".txt",
+        "data/company_policy.txt",
+        "data/policies/company_policy.txt",
+    ]
+
+    documents = []
+    used_path = None
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            loaded = _load_documents(candidate)
+            if loaded and any(d.page_content.strip() for d in loaded):
+                documents = loaded
+                used_path = candidate
+                break
+
+    if not documents:
+        logger.error("No valid RAG source document found. Using empty store.")
+        return FAISS.from_texts(["(no documents loaded)"], embeddings)
+
+    logger.info("Using RAG source: %s", used_path)
+
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=s.chunk_size,
+        chunk_overlap=s.chunk_overlap,
+    )
+    chunks = splitter.split_documents(documents)
+    # Cap to keep prompts small for Groq
+    chunks = chunks[:10]
+    logger.info("Building FAISS index over %d chunks...", len(chunks))
+    return FAISS.from_documents(chunks, embeddings)
+
+
+def get_retriever():
+    s = get_settings()
+    # Small k to keep context small
+    k = min(s.retrieval_k, 3)
+    return get_vectorstore().as_retriever(search_kwargs={"k": k})

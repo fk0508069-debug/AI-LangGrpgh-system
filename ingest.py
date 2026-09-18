@@ -1,85 +1,100 @@
-# ingest.py
-import os
+"""One-shot ingestion: load policy files → chunk → embed → save FAISS index.
+
+Run from project root:
+    python -m app.ingest
+"""
+
+from __future__ import annotations
+
 import logging
-from typing import List
-from langchain_community.document_loaders import Docx2txtLoader, PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_chroma import Chroma
-from langchain_core.documents import Document
+import os
+import sys
 
-from app.config import (
-    POLICIES_DIR, HR_DIR, PRODUCTS_DIR, DB_PATH,
-    EMBEDDING_MODEL, CHUNK_SIZE, CHUNK_OVERLAP
+from langchain_community.document_loaders import (
+    Docx2txtLoader,
+    PyPDFLoader,
+    TextLoader,
 )
+from langchain_community.vectorstores import FAISS
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
+from app.config import get_settings
+from app.logging_config import setup_logging
 
-def load_documents_from_dir(directory: str, category: str) -> List[Document]:
-    """Loads all .docx and .pdf files from a directory and tags them with a category."""
-    documents = []
-    if not os.path.exists(directory):
-        logger.warning(f"Directory not found: {directory}")
-        return documents
+setup_logging()
+logger = logging.getLogger("ingest")
 
-    for filename in os.listdir(directory):
-        filepath = os.path.join(directory, filename)
-        if filename.endswith(".docx"):
-            loader = Docx2txtLoader(filepath)
-        elif filename.endswith(".pdf"):
-            loader = PyPDFLoader(filepath)
-        else:
-            continue
-        
-        try:
-            docs = loader.load()
-            for doc in docs:
-                # Requirement 5: Metadata
-                doc.metadata["source"] = filename
-                doc.metadata["category"] = category
-                doc.metadata["document_type"] = filename.split(".")[-1]
-                if "page" not in doc.metadata:
-                    doc.metadata["page"] = 0
-            documents.extend(docs)
-            logger.info(f"Loaded {len(docs)} pages from {filename}")
-        except Exception as e:
-            logger.error(f"Failed to load {filename}: {e}")
-            
-    return documents
+# Where to persist the FAISS index
+INDEX_DIR = "data/faiss_index"
 
-def ingest():
-    logger.info("Starting ingestion pipeline...")
-    
-    # 1. Load documents with metadata
-    policy_docs = load_documents_from_dir(POLICIES_DIR, "policy")
-    hr_docs = load_documents_from_dir(HR_DIR, "hr")
-    product_docs = load_documents_from_dir(PRODUCTS_DIR, "product")
-    
-    all_documents = policy_docs + hr_docs + product_docs
-    if not all_documents:
-        logger.error("No documents found to ingest. Exiting.")
-        return
+# Which files to ingest — add/remove as needed
+SOURCE_FILES = [
+    "data/company_policy.txt",
+    "data/policies/company_policy.pdf",
+    # "data/policies/company_policy.docx",  # skip if broken
+]
 
-    # 2. Split documents
+
+def load_file(path: str):
+    if not os.path.exists(path):
+        logger.warning("Skipping missing file: %s", path)
+        return []
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".txt" or ext == ".md":
+        loader = TextLoader(path, encoding="utf-8")
+    elif ext == ".pdf":
+        loader = PyPDFLoader(path)
+    elif ext == ".docx":
+        loader = Docx2txtLoader(path)
+    else:
+        logger.warning("Unsupported file type: %s", path)
+        return []
+    try:
+        docs = loader.load()
+        logger.info("Loaded %s → %d doc(s)", path, len(docs))
+        return docs
+    except Exception as e:
+        logger.error("Failed to load %s: %s", path, e)
+        return []
+
+
+def main() -> None:
+    s = get_settings()
+    logger.info("Ingestion starting.")
+    logger.info("Chunk size=%d overlap=%d", s.chunk_size, s.chunk_overlap)
+
+    # 1. Load
+    all_docs = []
+    for path in SOURCE_FILES:
+        all_docs.extend(load_file(path))
+
+    if not all_docs:
+        logger.error("No documents loaded. Nothing to ingest.")
+        sys.exit(1)
+
+    logger.info("Total loaded: %d documents", len(all_docs))
+
+    # 2. Split
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE,
-        chunk_overlap=CHUNK_OVERLAP
+        chunk_size=s.chunk_size,
+        chunk_overlap=s.chunk_overlap,
     )
-    chunks = splitter.split_documents(all_documents)
-    logger.info(f"Split into {len(chunks)} chunks.")
+    chunks = splitter.split_documents(all_docs)
+    logger.info("Produced %d chunks", len(chunks))
 
-    # 3. Embed and store
-    embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
-    
-    logger.info("Storing in ChromaDB...")
-    vector_db = Chroma.from_documents(
-        documents=chunks,
-        embedding=embeddings,
-        persist_directory=DB_PATH
-    )
-    
-    logger.info(f"Successfully stored {len(chunks)} chunks in ChromaDB at {DB_PATH}.")
+    # 3. Embed
+    logger.info("Embedding with %s ...", s.embedding_model)
+    embeddings = HuggingFaceEmbeddings(model_name=s.embedding_model)
+
+    # 4. Build + persist
+    logger.info("Building FAISS index...")
+    vs = FAISS.from_documents(chunks, embeddings)
+
+    os.makedirs(INDEX_DIR, exist_ok=True)
+    vs.save_local(INDEX_DIR)
+    logger.info("Saved index to %s (%d vectors)", INDEX_DIR, vs.index.ntotal)
+
 
 if __name__ == "__main__":
-    ingest()
+    main()

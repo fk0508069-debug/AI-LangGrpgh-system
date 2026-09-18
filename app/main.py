@@ -1,52 +1,55 @@
-# app/main.py
-import logging
-from app.graph import build_graph
-from app.state import GraphState
+"""CLI runner — for interactive testing without FastAPI."""
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+from __future__ import annotations
+
+from app.logging_config import setup_logging
+
+setup_logging()
+
+import logging
+
+from app.graph import build_graph
+from app.services.session_store import session_store
+
 logger = logging.getLogger(__name__)
 
-def main():
-    logger.info("Starting Company Policy Chatbot...")
+
+def main() -> None:
+    logger.info("Starting E-Commerce AI Assistant (CLI)...")
     graph = build_graph()
-    
-    # Initialize empty state
-    state = {
-        "original_question": "",
-        "question": "",
-        "chat_history": [],
-        "query_type": "",
-        "documents": [],
-        "context": "",
-        "answer": "",
-        "validation_result": False,
-        "feedback": {}
-    }
-    
-    print("\n--- Company Policy Assistant ---")
-    print("Type 'exit' to quit.\n")
-    
+
+    session_id = "cli-session"
+    print("Chatbot ready. Type 'quit' to exit.\n")
+
     while True:
-        user_input = input("You: ")
-        if user_input.lower() in ["exit", "quit"]:
-            break
-            
-        # Update state with new question
-        state["original_question"] = user_input
-        
         try:
-            # Run the graph
+            user_input = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+
+        if not user_input:
+            continue
+        if user_input.lower() in {"quit", "exit"}:
+            break
+
+        state = {
+            "session_id": session_id,
+            "original_question": user_input,
+            "chat_history": [],
+            "documents": [],
+            "context": "",
+            "answer": "",
+            "validation_result": False,
+        }
+
+        try:
             result = graph.invoke(state)
-            
-            # Print the answer
-            print(f"\nAssistant: {result['answer']}\n")
-            
-            # Update the persistent state with new history and for the next loop
-            state["chat_history"] = result["chat_history"]
-            
+            print(f"\nAssistant: {result.get('answer', '')}\n")
         except Exception as e:
-            logger.error(f"Graph execution error: {e}")
-            print("Assistant: I encountered a critical error. Please try again.")
+            logger.exception("Graph error")
+            print(f"\n[error] {e}\n")
+
 
 if __name__ == "__main__":
     main()
