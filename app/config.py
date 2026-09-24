@@ -42,7 +42,7 @@ class Settings(BaseModel):
 
     # Models
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
-    llm_model: str = "llama-3.3-70b-versatile"
+    llm_model: str = "openai/gpt-oss-120b"
     temperature: float = 0.0
 
     # RAG
@@ -55,7 +55,7 @@ class Settings(BaseModel):
     max_history_messages: int = 20
 
     # URLs
-    product_base_url: str = "http://localhost:3000/details"
+    product_base_url: str = "https://new-ecomerce-app.vercel.app/details"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -85,7 +85,7 @@ class Settings(BaseModel):
                 "MONGO_COLLECTION", "MONGODB_COLLECTION", default="products"
             ),
             llm_model=_get(
-                "LLM_MODEL", default="llama-3.3-70b-versatile"
+                "LLM_MODEL", default="openai/gpt-oss-120b"
             ),
             temperature=float(
                 _get("TEMPERATURE", "LLM_TEMPERATURE", default="0.0")
@@ -105,7 +105,7 @@ class Settings(BaseModel):
             ),
             product_base_url=_get(
                 "PRODUCT_BASE_URL",
-                default="http://localhost:3000/details",
+                default="https://new-ecomerce-app.vercel.app/details",
             ),
         )
 
