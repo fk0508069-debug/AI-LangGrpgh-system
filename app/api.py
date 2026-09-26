@@ -251,7 +251,9 @@ from fastapi import FastAPI
 
 app = FastAPI()
 
-from app.graph import graph
+from app.graph import build_graph
+
+graph = build_graph()
 
 @app.get("/")
 def root():
