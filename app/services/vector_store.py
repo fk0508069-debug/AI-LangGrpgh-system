@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 from functools import lru_cache
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_community.document_loaders import Docx2txtLoader, TextLoader
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
