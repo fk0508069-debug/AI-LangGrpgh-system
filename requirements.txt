@@ -6,10 +6,10 @@ pymongo
 langchain-core
 langchain-community
 langchain-groq
-langchain-huggingface
+# langchain-huggingface
 langchain-text-splitters
-langchain-chroma
+# langchain-chroma
 langgraph
-sentence-transformers
+# sentence-transformers
 docx2txt
 pypdf

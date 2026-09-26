@@ -5,10 +5,11 @@ from __future__ import annotations
 import logging
 import os
 from functools import lru_cache
-
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_community.document_loaders import Docx2txtLoader, TextLoader
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
+
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.config import get_settings
@@ -58,8 +59,11 @@ def _load_documents(path: str):
 @lru_cache(maxsize=1)
 def get_vectorstore() -> FAISS:
     s = get_settings()
-    embeddings = HuggingFaceEmbeddings(model_name=s.embedding_model)
+  
 
+    embeddings = GoogleGenerativeAIEmbeddings(
+    model="models/gemini-embedding-001"
+)
     # Resolve the path: prefer .txt over .docx if both exist
     path = s.document_path
     base = os.path.splitext(path)[0]

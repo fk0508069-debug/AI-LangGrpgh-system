@@ -5,6 +5,7 @@ from typing import List
 from langchain_community.document_loaders import Docx2txtLoader, PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
+
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 
@@ -71,7 +72,7 @@ def ingest():
     logger.info(f"Split into {len(chunks)} chunks.")
 
     # 3. Embed and store
-    embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
+    
     
     logger.info("Storing in ChromaDB...")
     vector_db = Chroma.from_documents(
