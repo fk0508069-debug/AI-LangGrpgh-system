@@ -251,10 +251,12 @@ from fastapi import FastAPI
 
 app = FastAPI()
 
+from app.graph import graph
+
 @app.get("/")
 def root():
     return {"status": "FastAPI is working"}
 
 @app.get("/test")
 def test():
-    return {"message": "Vercel FastAPI works"}
+    return {"message": "Graph loaded"}
