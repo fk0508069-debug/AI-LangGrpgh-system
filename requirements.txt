@@ -13,3 +13,4 @@ langgraph
 # sentence-transformers
 docx2txt
 pypdf
+langchain-google-genai
