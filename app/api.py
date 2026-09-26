@@ -248,17 +248,28 @@
 #     return result
 
 from fastapi import FastAPI
+import traceback
 
 app = FastAPI()
 
-from app.graph import build_graph
+graph = None
+graph_error = None
 
-graph = build_graph()
+try:
+    from app.graph import build_graph
+    graph = build_graph()
+except Exception:
+    graph_error = traceback.format_exc()
+
 
 @app.get("/")
 def root():
     return {"status": "FastAPI is working"}
 
-@app.get("/test")
-def test():
-    return {"message": "Graph loaded"}
+
+@app.get("/debug")
+def debug():
+    return {
+        "graph_loaded": graph is not None,
+        "error": graph_error
+    }
