@@ -16,8 +16,7 @@ from langchain_community.document_loaders import (
     TextLoader,
 )
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_google_genai import GoogleGenerativeAIEmbeddingsfrom langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.config import get_settings
 from app.logging_config import setup_logging
