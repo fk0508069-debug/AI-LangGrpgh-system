@@ -55,7 +55,7 @@ class Settings(BaseModel):
     max_history_messages: int = 20
 
     # URLs
-    product_base_url: str = "https://new-ecomerce-app.vercel.app/details"
+    product_base_url: str = "https://demo-fiver-project.vercel.app/products"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -105,7 +105,7 @@ class Settings(BaseModel):
             ),
             product_base_url=_get(
                 "PRODUCT_BASE_URL",
-                default="https://new-ecomerce-app.vercel.app/details",
+                default="https://demo-fiver-project.vercel.app/products",
             ),
         )
 

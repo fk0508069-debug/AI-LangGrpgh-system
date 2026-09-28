@@ -31,29 +31,24 @@ CONFIRMATION_NO = re.compile(
 CANCELLABLE_STATUSES = {"pending", "processing", "in_process", "placed", "confirmed"}
 
 
-def _buyer_info(order: dict) -> tuple[str, str]:
-    user_id = order.get("userId")
-    if not user_id:
-        return "", ""
-    try:
-        user = mongodb.get_user_by_id(user_id)
-        if not user:
-            return "", ""
-        return (
-            safe_string(user.get("name") or user.get("fullName")),
-            safe_string(
-                user.get("phone") or user.get("phoneNumber") or user.get("contact")
-            ),
-        )
-    except Exception:
-        logger.exception("User lookup failed.")
-        return "", ""
-
-
 def _render_order(order: dict, tracking: str) -> str:
-    buyer_name, phone = _buyer_info(order)
-    order_id = safe_string(order.get("order_id") or order.get("orderId"))
-    status_val = safe_string(order.get("status"), "Not available")
+    """Render a professional order summary from the database document."""
+    
+    # 1. Extract embedded customer details directly from the order
+    customer = order.get("customer", {})
+    buyer_name = safe_string(customer.get("fullName"), "Customer")
+    phone = safe_string(customer.get("phone"))
+    
+    address_parts = [
+        safe_string(customer.get("address")),
+        safe_string(customer.get("city")),
+        safe_string(customer.get("state")),
+        safe_string(customer.get("postalCode")),
+    ]
+    address = ", ".join(part for part in address_parts if part)
+
+    # 2. Extract order meta
+    status_val = safe_string(order.get("status"), "Not available").capitalize()
     order_date = get_order_date(order)
     expected = add_business_days(order_date, 5) if order_date else None
 
@@ -61,51 +56,66 @@ def _render_order(order: dict, tracking: str) -> str:
     if not isinstance(items, list):
         items = []
 
-    lines = ["Here are the details of your order 📦", "", "**Order Summary**"]
-    lines.append(f"• Tracking number: {tracking}")
-    if order_id:
-        lines.append(f"• Order ID: {order_id}")
+    # 3. Build the response
+    lines = ["Here are the details of your order.", "", "**Order Summary**"]
+    lines.append(f"• Tracking Number: {tracking}")
     lines.append(f"• Status: {status_val}")
-    if buyer_name:
-        lines.append(f"• Buyer: {buyer_name}")
+    lines.append(f"• Customer Name: {buyer_name}")
+    
     if phone:
-        lines.append(f"• Contact: {phone}")
+        lines.append(f"• Contact Number: {phone}")
+    if address:
+        lines.append(f"• Shipping Address: {address}")
     if order_date:
         lines.append(f"• Placed on: {order_date.strftime('%B %d, %Y')}")
-    if expected:
-        lines.append(f"• Expected arrival: {expected.strftime('%B %d, %Y')}")
-        lines.append("• Delivery window: up to 5 business days")
+        
+    if expected and status_val.lower() not in ["cancelled", "canceled"]:
+        lines.append(f"• Expected Arrival: {expected.strftime('%B %d, %Y')}")
+        lines.append("• Delivery Window: Up to 5 business days")
 
+    # 4. Add Item Details
     if items:
-        lines += ["", "**Items**"]
-        grand = 0.0
+        lines += ["", "**Items Ordered**"]
         for idx, item in enumerate(items, 1):
             if not isinstance(item, dict):
                 continue
             name = safe_string(item.get("name"), "Item")
-            qty = safe_int(item.get("quantity") or item.get("qty") or 1, 1)
-            unit = safe_float(item.get("price"))
-            line = unit * qty
-            grand += line
+            sku = safe_string(item.get("sku"), "N/A")
+            qty = safe_int(item.get("quantity"), 1)
+            unit = safe_float(item.get("unitPrice"))
+            line_total = safe_float(item.get("lineTotal"), unit * qty)
+            
             lines.append(f"{idx}. **{name}**")
+            lines.append(f"   • SKU: {sku}")
             lines.append(f"   • Quantity: {qty}")
-            lines.append(f"   • Unit price: Rs. {format_money(unit)}")
-            lines.append(f"   • Line total: Rs. {format_money(line)}")
-        stored_total = order.get("total")
-        total = safe_float(stored_total) if stored_total is not None else grand
-        if total > 0:
-            lines += ["", f"**Total: Rs. {format_money(total)}**"]
+            lines.append(f"   • Unit Price: Rs. {format_money(unit)}")
+            lines.append(f"   • Line Total: Rs. {format_money(line_total)}")
+        
+        # Financial Summary
+        subtotal = safe_float(order.get("subtotal", 0))
+        shipping = safe_float(order.get("shipping", 0))
+        total = safe_float(order.get("total", 0))
+        
+        lines += ["", "**Order Total**"]
+        if subtotal > 0:
+            lines.append(f"• Subtotal: Rs. {format_money(subtotal)}")
+        if shipping >= 0:
+            lines.append(f"• Shipping: Rs. {format_money(shipping)}")
+        lines.append(f"**• Total: Rs. {format_money(total)}**")
     else:
         lines += ["", "_No item details are available for this order._"]
 
-    if expected:
+    # 5. Closing Status Message
+    if status_val.lower() in ["cancelled", "canceled"]:
+        lines += ["", "This order has been cancelled."]
+    elif expected:
         lines += [
             "",
             f"Your order is on track and should arrive around "
-            f"**{expected.strftime('%B %d, %Y')}**. 💙",
+            f"**{expected.strftime('%B %d, %Y')}**.",
         ]
     else:
-        lines += ["", "Your order is being processed. 💙"]
+        lines += ["", "Your order is currently being processed."]
 
     return "\n".join(lines)
 
@@ -122,7 +132,7 @@ def order_tracking_node(state: GraphState) -> dict:
         return {
             "answer": (
                 f"I couldn't find an order with tracking number "
-                f"{tracking}. Please double-check and try again. 😊"
+                f"**{tracking}**. Please double-check the number and try again."
             )
         }
 
@@ -134,7 +144,7 @@ def order_tracking_node(state: GraphState) -> dict:
 
 def order_tracking_prompt_node(state: GraphState) -> dict:
     return {
-        "answer": "Sure! Please share your tracking number and I'll look it up for you. 😊"
+        "answer": "Please provide your tracking number so I can look up your order."
     }
 
 
@@ -147,7 +157,7 @@ def order_followup_node(state: GraphState) -> dict:
         return {
             "answer": (
                 "I don't have an active order in this session. "
-                "Could you share the tracking number? 📦"
+                "Could you please provide the tracking number?"
             )
         }
 
@@ -169,31 +179,35 @@ def order_followup_node(state: GraphState) -> dict:
     )
 
     if _contains_phrase(question, TRACKING_FOLLOWUP_PHRASES):
-        return {"answer": f"Your tracking number is **{tracking}**. 📦"}
+        return {"answer": f"Your tracking number is **{tracking}**."}
 
     if _contains_phrase(question, ORDER_STATUS_PHRASES):
-        status_val = safe_string(order.get("status"), "not available")
-        return {"answer": f"Your order is currently marked as **{status_val}**. 😊"}
+        status_val = safe_string(order.get("status"), "not available").capitalize()
+        return {"answer": f"Your order is currently marked as **{status_val}**."}
 
     if _contains_phrase(question, ORDER_DELIVERY_PHRASES):
+        status_val = safe_string(order.get("status"), "").lower()
+        if status_val in ["cancelled", "canceled"]:
+            return {"answer": "This order has been cancelled and will not be delivered."}
+            
         order_date = get_order_date(order)
         if order_date:
             expected = add_business_days(order_date, 5)
             return {
                 "answer": (
                     f"Your expected delivery date is "
-                    f"**{expected.strftime('%B %d, %Y')}**. 😊"
+                    f"**{expected.strftime('%B %d, %Y')}**."
                 )
             }
         return {
             "answer": (
                 "I can see your order, but the placement date is "
-                "missing so I can't estimate delivery."
+                "missing so I can't estimate the delivery date."
             )
         }
 
     return {
-        "answer": "I can help with that — just tell me what you'd like to know about the order. 📦"
+        "answer": "I can help with that. Please tell me what you'd like to know about the order."
     }
 
 
@@ -205,7 +219,7 @@ def cancel_request_node(state: GraphState) -> dict:
         return {
             "answer": (
                 "I can help with that. Please send your order's tracking number "
-                "so I can check whether it is still eligible for cancellation. 📦"
+                "so I can check whether it is still eligible for cancellation."
             )
         }
 
@@ -215,7 +229,7 @@ def cancel_request_node(state: GraphState) -> dict:
     if not order:
         return {
             "answer": (
-                f"I couldn't find an order with tracking number {tracking}. "
+                f"I couldn't find an order with tracking number **{tracking}**. "
                 "Please double-check it and try again."
             )
         }
@@ -223,13 +237,15 @@ def cancel_request_node(state: GraphState) -> dict:
     session.tracking_number = tracking
     session.order_data = order
 
-    status_val = (
-        safe_string(order.get("status"), "").lower().replace("-", "_").replace(" ", "_")
-    )
+    status_val = safe_string(order.get("status"), "").lower().replace("-", "_").replace(" ", "_")
+    
+    if status_val in ["cancelled", "canceled"]:
+        return {"answer": "This order has already been cancelled."}
+
     if status_val not in CANCELLABLE_STATUSES:
         return {
             "answer": (
-                f"This order is currently **{safe_string(order.get('status'), 'not available')}** "
+                f"This order is currently **{safe_string(order.get('status'), 'not available').capitalize()}** "
                 "and cannot be cancelled here. Please contact customer support for help."
             )
         }
@@ -267,7 +283,7 @@ def cancel_confirmation_node(state: GraphState) -> dict:
 
     if CONFIRMATION_NO.fullmatch(normalized):
         session.state = ConversationState.ORDER_FOLLOWUP
-        return {"answer": "Understood. Your order has not been cancelled. 😊"}
+        return {"answer": "Understood. Your order has not been cancelled."}
 
     if not CONFIRMATION_YES.fullmatch(normalized):
         return {"answer": "Please reply **yes** to cancel the order or **no** to keep it."}
@@ -282,9 +298,7 @@ def cancel_confirmation_node(state: GraphState) -> dict:
         }
 
     age_hours = hours_since_order(order)
-    status_val = (
-        safe_string(order.get("status"), "").lower().replace("-", "_").replace(" ", "_")
-    )
+    status_val = safe_string(order.get("status"), "").lower().replace("-", "_").replace(" ", "_")
 
     if age_hours is None or age_hours >= 24 or status_val not in CANCELLABLE_STATUSES:
         session.state = ConversationState.IDLE
