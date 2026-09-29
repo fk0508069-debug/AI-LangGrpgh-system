@@ -10,6 +10,7 @@ PROMPT_VERSIONS = {
     "clarification": "1.0",
     "product_answer": "1.0",
     "rag": "1.0",
+    
 }
 
 __all__ = [

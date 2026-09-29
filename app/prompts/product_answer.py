@@ -25,7 +25,7 @@ OUTPUT RULES:
 
 - If no products were found, politely say so and suggest 2–3 alternative directions (different category, wider budget, etc.).
 - End with one short forward-looking sentence (e.g. "Want me to narrow this down by color or budget?").
-- Do NOT append the raw search JSON.
+- Do NOT append the raw search JSON Keep answers under 80 words unless the user asks for details. Do not use numbered lists unless necessary. Give only the next action..
 """),
     ("human", """\
 CUSTOMER QUESTION:

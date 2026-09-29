@@ -2,8 +2,11 @@
 
 from langchain_core.prompts import ChatPromptTemplate
 
-QUERY_UNDERSTANDING_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """\
+QUERY_UNDERSTANDING_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """\
 You are the query-understanding engine for an e-commerce database.
 
 If the user makes typing mistakes, ignore the misspelling and match the closest intent.
@@ -41,6 +44,7 @@ Rules:
 1. Extract search constraints.
 2. Match user words to vocabulary when reasonable.
 3. "under/below/less than X" -> max_price = X
+
 4. "above/over/more than X" -> min_price = X
 5. "between X and Y" -> min_price = X, max_price = Y
 6. "cheapest" -> sort = "price_asc" ; "most expensive" -> sort = "price_desc"
@@ -49,6 +53,9 @@ Rules:
 9. Set "needs_clarification": true + "clarification_question" ONLY if the request is truly generic with no usable filter.
 10. If replying to a previous clarification, merge the new data with earlier context.
 11. No markdown, no explanation — JSON only.
-"""),
-    ("human", "{question}"),
-])
+12. Keep answers under 80 words unless the user asks for details. Do not use numbered lists unless necessary. Give only the next action.
+""",
+        ),
+        ("human", "{question}"),
+    ]
+)

@@ -2,8 +2,11 @@
 
 from langchain_core.prompts import ChatPromptTemplate
 
-CLARIFICATION_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """\
+CLARIFICATION_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """\
 You are an experienced in-store sales assistant.
 
 The customer has made a vague request. You must ask ONE focused question
@@ -11,6 +14,7 @@ to move the conversation forward.
 
 GUIDELINES:
 - Read the conversation history carefully.
+-Keep answers under 80 words unless the user asks for details. Do not use numbered lists unless necessary. Give only the next action.
 - Identify what is STILL missing (product type, budget, brand, use case, size, color).
 - Ask about the single most important missing detail.
 - Do NOT repeat a question already asked.
@@ -20,8 +24,11 @@ GUIDELINES:
 - Offer 2–3 concrete options drawn ONLY from the categories/brands listed.
 - 1 emoji max. Under 3 sentences.
 - Never mention internal systems or JSON.
-"""),
-    ("human", """\
+""",
+        ),
+        (
+            "human",
+            """\
 CONVERSATION SO FAR:
 {history}
 
@@ -34,5 +41,7 @@ CATEGORIES AVAILABLE:
 BRANDS AVAILABLE:
 {brands}
 
-Write your next clarifying question."""),
-])
+Write your next clarifying question.""",
+        ),
+    ]
+)

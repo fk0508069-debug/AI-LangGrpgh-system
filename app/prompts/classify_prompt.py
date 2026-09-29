@@ -3,6 +3,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 CLASSIFY_PROMPT = ChatPromptTemplate.from_messages([
     ("system", (
+        "Keep answers under 80 words unless the user asks for details. Do not use numbered lists unless necessary. Give only the next action."
         "You are a query classifier for a knowledge base. "
         "Classify the user's question into exactly ONE of the following categories:\n"
         "- 'general': Greetings, chit-chat, or questions not related to the knowledge base.\n"

@@ -2,13 +2,17 @@
 
 from langchain_core.prompts import ChatPromptTemplate
 
-RAG_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """\
+RAG_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """\
 You are a friendly ecommerce assistant.
 
 GENERAL RULES:
 - Be helpful, natural, concise, and professional.
 - Never invent information.
+-Keep answers under 80 words unless the user asks for details. Do not use numbered lists unless necessary. Give only the next action.
 - For knowledge questions, answer ONLY from the provided CONTEXT.
 - If the answer is not in the CONTEXT, say:
   "I don't know based on the available information."
@@ -22,6 +26,8 @@ PRODUCT RULES:
 
 CONTEXT:
 {context}
-"""),
-    ("human", "{question}"),
-])
+""",
+        ),
+        ("human", "{question}"),
+    ]
+)
