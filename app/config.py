@@ -25,7 +25,7 @@ _DEFAULTS: Dict[str, Any] = {
     "chunk_overlap": 100,
     "retrieval_k": 5,
     "max_history_messages": 20,
-    "product_base_url": "https://demo-fiver-project.vercel.app/products",
+    "product_base_url": "https://fiver-project-flax.vercel.app/products",
 }
 
 
