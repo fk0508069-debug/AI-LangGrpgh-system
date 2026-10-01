@@ -744,7 +744,6 @@ def generate_product_answer_node(state: GraphState) -> dict:
     parsed = state.get("parsed_query") or {}
     products = state.get("products") or []
 
-    # Always remember the parse so the next refinement can inherit from it.
     session.last_parsed = parsed
 
     if products:
@@ -754,14 +753,45 @@ def generate_product_answer_node(state: GraphState) -> dict:
         session.state = ConversationState.IDLE
         session.last_products = products
     else:
-        # Empty result: keep the thread alive so a refinement like
-        # "under 2000" stays in the product pipeline instead of RAG.
+        # Empty result: keep the thread alive and ANCHOR it to the category
+        # so a follow-up like "under 2000" doesn't lose "laptop".
         session.pending_slot = None
         session.state = ConversationState.AWAITING_CLARIFICATION
-        if not session.pending_clarification:
+
+        prior = session.last_parsed or {}
+        anchor = (
+            parsed.get("category")
+            or prior.get("category")
+            or parsed.get("product_name")
+            or prior.get("product_name")
+            or ""
+        )
+        if anchor:
+            session.pending_clarification = f"{anchor} — {question}"
+        elif not session.pending_clarification:
             session.pending_clarification = question
 
     context = _build_product_context(products)
+
+    # Optional: inject cheapest-in-category hint when nothing matched.
+    if not products:
+        category = (
+            parsed.get("category")
+            or (session.last_parsed or {}).get("category")
+        )
+        if category:
+            try:
+                cheapest = mongodb.cheapest_in_category(category)  # type: ignore[attr-defined]
+            except AttributeError:
+                cheapest = None
+            except Exception:
+                logger.exception("cheapest_in_category failed")
+                cheapest = None
+            if cheapest:
+                context += (
+                    f"\n\nCHEAPEST IN CATEGORY ({category}): "
+                    f"Rs. {format_money(cheapest.get('price'))}"
+                )
 
     try:
         chain = PRODUCT_ANSWER_PROMPT | _llm()
@@ -777,14 +807,3 @@ def generate_product_answer_node(state: GraphState) -> dict:
         answer = _format_products_fallback(products)
 
     return {"answer": answer}
-
-
-__all__ = [
-    "understand_query_node",
-    "clarify_node",
-    "search_structured_node",
-    "search_keyword_node",
-    "search_semantic_node",
-    "merge_results_node",
-    "generate_product_answer_node",
-]

@@ -18,6 +18,7 @@ class ConversationState(str, Enum):
     AWAITING_CLARIFICATION = "awaiting_clarification"
     ORDER_FOLLOWUP = "order_followup"
     AWAITING_CANCEL_CONFIRMATION = "awaiting_cancel_confirmation"
+    AWAITING_REORDER_CONFIRMATION = "awaiting_reorder_confirmation"
 
 
 class Intent(str, Enum):
@@ -29,8 +30,11 @@ class Intent(str, Enum):
     ORDER_FOLLOWUP = "order_followup"
     ORDER_CANCEL = "order_cancel"
     CANCEL_CONFIRMATION = "cancel_confirmation"
+    ORDER_REORDER = "order_reorder"
+    REORDER_CONFIRMATION = "reorder_confirmation"
     PRODUCT = "product"
-    RAG = "rag"
+    POLICY = "policy"
+    RAG = "rag"  # legacy alias, routed to the same RAG path
 
 
 @dataclass
@@ -44,9 +48,19 @@ class SessionData:
     order_data: Optional[dict] = None
 
     pending_clarification: Optional[str] = None
+    pending_slot: Optional[str] = None
     last_parsed: Optional[dict] = None
     clarification_attempts: int = 0
     last_products: List[dict] = field(default_factory=list)
+
+    # --- reorder support ---
+    last_order_id: Optional[str] = None
+    last_order_items: List[dict] = field(default_factory=list)
+    last_order_total: Optional[float] = None
+    pending_reorder: Optional[dict] = None
+
+    # --- authenticated identity (set from API layer) ---
+    customer_id: Optional[str] = None
 
     _vocabulary_cache: Optional[Dict[str, List[str]]] = None
     _vocabulary_cache_time: Optional[datetime] = None
@@ -63,6 +77,9 @@ class GraphState(TypedDict, total=False):
     intent: str
     error: Optional[str]
 
+    # auth (propagated from API layer, not trusted from user input)
+    customer_id: Optional[str]
+
     # memory
     chat_history: Annotated[List[BaseMessage], operator.add]
 
@@ -73,6 +90,8 @@ class GraphState(TypedDict, total=False):
     tracking_number: Optional[str]
     order_data: Optional[dict]
     cancel_confirmed: bool
+    reorder_preview: Optional[str]
+    pending_reorder: Optional[dict]
 
     # product pipeline
     query_type: str

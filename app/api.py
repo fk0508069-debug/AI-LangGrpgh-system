@@ -162,6 +162,7 @@ def ask_question(request: QueryRequest) -> QueryResponse:
     initial_state = {
         "session_id": session_id,
         "original_question": request.question,
+        "customer_id": request.customer_id,  # NEW
         "chat_history": [],
         "documents": [],
         "context": "",
@@ -184,7 +185,6 @@ def ask_question(request: QueryRequest) -> QueryResponse:
         session_id=session_id,
         history=history,
     )
-
 
 @app.post(
     "/clear",

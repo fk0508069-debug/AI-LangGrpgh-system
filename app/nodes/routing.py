@@ -12,7 +12,7 @@ from app.state import ConversationState, GraphState, Intent
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Phrase tables (kept identical to the original rag.py)
+# Phrase tables
 # ---------------------------------------------------------------------------
 ORDER_INTENT_PHRASES = (
     "track this number",
@@ -55,7 +55,7 @@ PRODUCT_INTENT_PHRASES = (
     "i want", "i need", "i'd like", "i would like", "i wanna",
     "products", "product", "buy", "shopping", "shop",
     "do you have", "have any", "available", "find me some",
-    # common product nouns so a bare noun works too
+    # common product nouns
     "watch", "watches",
     "phone", "phones", "mobile", "smartphone",
     "laptop", "laptops", "computer", "pc",
@@ -106,6 +106,52 @@ CANCEL_INTENT_PATTERNS = (
     r"\b(?:want|need|would like)\s+to\s+cancel\b",
 )
 
+# --- Reorder ---------------------------------------------------------------
+REORDER_INTENT_PHRASES = (
+    "order this again",
+    "order it again",
+    "make this order again",
+    "make the same order",
+    "reorder this",
+    "reorder it",
+    "reorder my last order",
+    "repeat my last order",
+    "repeat this order",
+    "buy this again",
+    "buy it again",
+    "i want the same order",
+    "same order again",
+    "place this order again",
+    "place the order again",
+)
+
+REORDER_INTENT_PATTERNS = (
+    r"\b(?:re)?order\b.*\bagain\b",
+    r"\brepeat\b.*\border\b",
+    r"\bsame\b.*\border\b",
+    r"\bbuy\b.*\bagain\b",
+)
+
+REORDER_CONFIRM_YES = re.compile(
+    r"^(?:yes|yeah|yep|yup|sure|okay|ok|confirm|confirmed|"
+    r"please do|do it|go ahead|place it|place the order)$",
+    re.IGNORECASE,
+)
+REORDER_CONFIRM_NO = re.compile(
+    r"^(?:no|nope|nah|cancel that|don't|do not|never mind|nevermind|keep it)$",
+    re.IGNORECASE,
+)
+
+# --- Price refinement ------------------------------------------------------
+_PRICE_WORD_TOKENS = frozenset({
+    "under", "below", "less", "than", "over", "above", "more",
+    "between", "and", "from", "to", "around", "about",
+    "approximately", "approx", "roughly", "upto", "up",
+    "max", "maximum", "min", "minimum",
+    "rs", "pkr", "rupee", "rupees",
+    "cheaper", "cheap", "budget", "price", "range",
+})
+
 TRACKING_NUMBER_PATTERN = re.compile(
     r"(?<![A-Za-z0-9])(?=[A-Za-z0-9-]{6,30}(?![A-Za-z0-9]))"
     r"(?=[A-Za-z0-9-]*\d)([A-Za-z0-9-]{6,30})(?![A-Za-z0-9])"
@@ -124,40 +170,15 @@ VAGUE_QUERY_PATTERNS = [
 ]
 
 VAGUE_KEYWORDS = {
-    "something",
-    "anything",
-    "stuff",
-    "things",
-    "product",
-    "products",
-    "item",
-    "items",
-    "recommend",
-    "suggest",
+    "something", "anything", "stuff", "things",
+    "product", "products", "item", "items",
+    "recommend", "suggest",
 }
 
 VAGUE_STOPWORDS = {
-    "find",
-    "search",
-    "show",
-    "me",
-    "a",
-    "an",
-    "the",
-    "some",
-    "any",
-    "for",
-    "i",
-    "want",
-    "need",
-    "looking",
-    "help",
-    "please",
-    "can",
-    "you",
-    "get",
-    "give",
-    "buy",
+    "find", "search", "show", "me", "a", "an", "the",
+    "some", "any", "for", "i", "want", "need", "looking",
+    "help", "please", "can", "you", "get", "give", "buy",
 }
 
 IRRELEVANT_REPLY_PATTERNS = [
@@ -195,6 +216,33 @@ def is_product_request(message: str) -> bool:
 def is_cancel_request(message: str) -> bool:
     text = re.sub(r"\s+", " ", message.lower().strip())
     return any(re.search(p, text) for p in CANCEL_INTENT_PATTERNS)
+
+
+def is_reorder_request(message: str) -> bool:
+    text = re.sub(r"\s+", " ", message.lower().strip())
+    return _contains_phrase(text, REORDER_INTENT_PHRASES) or any(
+        re.search(p, text) for p in REORDER_INTENT_PATTERNS
+    )
+
+
+def _looks_like_price_refinement(question: str) -> bool:
+    """
+    True if the message is only price words and/or numbers.
+
+    Examples:
+        "under 1000"
+        "5000"
+        "between 500 and 2000"
+        "below rs 500"
+        "cheaper than 3000"
+    """
+    text = (question or "").strip().lower()
+    if not text or not re.search(r"\d", text):
+        return False
+    tokens = re.findall(r"[a-z]+|\d+", text)
+    if not tokens:
+        return False
+    return all(tok.isdigit() or tok in _PRICE_WORD_TOKENS for tok in tokens)
 
 
 def is_vague_query(question: str) -> bool:
@@ -287,7 +335,16 @@ def detect_greeting(question: str) -> Optional[str]:
 def load_session_node(state: GraphState) -> dict:
     session_id = state["session_id"]
     session = session_store.get(session_id)
-    logger.info("load_session | %s | state=%s", session_id, session.state.value)
+
+    # Propagate authenticated identity from the API layer into the session.
+    incoming_customer_id = state.get("customer_id")
+    if incoming_customer_id:
+        session.customer_id = incoming_customer_id
+
+    logger.info(
+        "load_session | %s | state=%s | customer=%s",
+        session_id, session.state.value, session.customer_id,
+    )
     return {"session": session}
 
 
@@ -306,29 +363,43 @@ def detect_intent_node(state: GraphState) -> dict:
     if session.state == ConversationState.AWAITING_CANCEL_CONFIRMATION:
         return {"intent": Intent.CANCEL_CONFIRMATION.value}
 
-    # 2. Pending clarification
+    # 2. Reorder confirmation
+    if session.state == ConversationState.AWAITING_REORDER_CONFIRMATION:
+        return {"intent": Intent.REORDER_CONFIRMATION.value}
+
+    # 3. Pending clarification → keep in the product pipeline
     if session.state == ConversationState.AWAITING_CLARIFICATION:
         return {"intent": Intent.PRODUCT.value}
 
-    # 3. Garbage
+    # 4. Garbage
     if is_garbage_input(question):
         return {"intent": Intent.GARBAGE.value}
 
-    # 4. Greeting
+    # 5. Greeting
     greeting = detect_greeting(question)
     if greeting:
         return {"intent": Intent.GREETING.value, "greeting_response": greeting}
 
-    # 5. Cancel
+    # 6. Cancel
     if is_cancel_request(question):
         return {"intent": Intent.ORDER_CANCEL.value}
 
-    # 6. Tracking number present
+    # 7. Reorder — needs a prior order in context
+    if is_reorder_request(question):
+        if (
+            session.order_data
+            or session.last_order_id
+            or session.tracking_number
+        ):
+            return {"intent": Intent.ORDER_REORDER.value}
+        return {"intent": Intent.ORDER_TRACKING_PROMPT.value}
+
+    # 8. Tracking number present
     tnum = extract_tracking_number(question)
     if tnum:
         return {"intent": Intent.ORDER_TRACKING.value, "tracking_number": tnum}
 
-    # 7. Followup on existing order in session
+    # 9. Follow-up on an existing order in session
     if session.tracking_number:
         text = question.lower().strip()
         if (
@@ -338,16 +409,32 @@ def detect_intent_node(state: GraphState) -> dict:
         ):
             return {"intent": Intent.ORDER_FOLLOWUP.value}
 
-    # 8. Asked to track but no number yet
+    # 10. Asked to track but no number yet
     if is_order_tracking_request(question):
         return {"intent": Intent.ORDER_TRACKING_PROMPT.value}
 
-    # 9. Product / vague
+    # 11. Product / vague
     if is_product_request(question) or is_vague_query(question):
         return {"intent": Intent.PRODUCT.value}
 
-    # 10. Default
-    return {"intent": Intent.RAG.value}
+    # 12. Refinement of a previous product search.
+    # After a successful search, state is IDLE but session.last_parsed still
+    # holds the category. A bare "under 1000", "5000", or "between 500 and 2000"
+    # must stay in the product pipeline, not fall through to RAG.
+    last_parsed = session.last_parsed or {}
+    has_prior_product_context = bool(
+        last_parsed.get("category") or last_parsed.get("product_name")
+    )
+    if has_prior_product_context and _looks_like_price_refinement(question):
+        logger.info(
+            "intent: price refinement detected | prior_category=%s | q=%r",
+            last_parsed.get("category") or last_parsed.get("product_name"),
+            question,
+        )
+        return {"intent": Intent.PRODUCT.value}
+
+    # 13. Default → POLICY (RAG)
+    return {"intent": Intent.POLICY.value}
 
 
 def greeting_node(state: GraphState) -> dict:
@@ -370,6 +457,7 @@ __all__ = [
     "is_order_tracking_request",
     "is_product_request",
     "is_cancel_request",
+    "is_reorder_request",
     "is_vague_query",
     "is_garbage_input",
     "is_irrelevant_reply",
@@ -378,5 +466,7 @@ __all__ = [
     "TRACKING_FOLLOWUP_PHRASES",
     "ORDER_STATUS_PHRASES",
     "ORDER_DELIVERY_PHRASES",
+    "REORDER_CONFIRM_YES",
+    "REORDER_CONFIRM_NO",
     "_contains_phrase",
 ]

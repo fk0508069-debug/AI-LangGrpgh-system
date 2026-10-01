@@ -22,6 +22,8 @@ from app.nodes import (
     order_tracking_prompt_node,
     rag_generate_node,
     rag_retrieve_node,
+    reorder_confirmation_node,
+    reorder_request_node,
     save_turn_node,
     search_keyword_node,
     search_semantic_node,
@@ -35,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 def _route_after_intent(state: GraphState) -> str:
     """Map the detected intent to the next node name."""
-    intent = state.get("intent") or Intent.RAG.value
+    intent = state.get("intent") or Intent.POLICY.value
     mapping = {
         Intent.EMPTY.value: "save_turn",
         Intent.GARBAGE.value: "garbage",
@@ -45,7 +47,10 @@ def _route_after_intent(state: GraphState) -> str:
         Intent.ORDER_FOLLOWUP.value: "order_followup",
         Intent.ORDER_CANCEL.value: "cancel_request",
         Intent.CANCEL_CONFIRMATION.value: "cancel_confirmation",
+        Intent.ORDER_REORDER.value: "reorder_request",
+        Intent.REORDER_CONFIRMATION.value: "reorder_confirmation",
         Intent.PRODUCT.value: "understand_query",
+        Intent.POLICY.value: "rag_retrieve",
         Intent.RAG.value: "rag_retrieve",
     }
     return mapping.get(intent, "rag_retrieve")
@@ -77,6 +82,8 @@ def build_graph():
     workflow.add_node("order_followup", order_followup_node)
     workflow.add_node("cancel_request", cancel_request_node)
     workflow.add_node("cancel_confirmation", cancel_confirmation_node)
+    workflow.add_node("reorder_request", reorder_request_node)
+    workflow.add_node("reorder_confirmation", reorder_confirmation_node)
 
     workflow.add_node("understand_query", understand_query_node)
     workflow.add_node("clarify", clarify_node)
@@ -108,6 +115,8 @@ def build_graph():
             "order_followup": "order_followup",
             "cancel_request": "cancel_request",
             "cancel_confirmation": "cancel_confirmation",
+            "reorder_request": "reorder_request",
+            "reorder_confirmation": "reorder_confirmation",
             "understand_query": "understand_query",
             "rag_retrieve": "rag_retrieve",
         },
@@ -122,6 +131,8 @@ def build_graph():
         "order_followup",
         "cancel_request",
         "cancel_confirmation",
+        "reorder_request",
+        "reorder_confirmation",
     ]:
         workflow.add_edge(node, "save_turn")
 

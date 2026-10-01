@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field
 class QueryRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
     session_id: str = Field(..., min_length=1, max_length=100)
+    # TODO: replace with real auth (JWT/session cookie). For now optional.
+    customer_id: Optional[str] = Field(default=None, max_length=100)
 
 
 class HistoryMessage(BaseModel):

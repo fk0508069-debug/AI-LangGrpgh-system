@@ -7,6 +7,8 @@ from app.nodes.orders import (
     order_followup_node,
     order_tracking_node,
     order_tracking_prompt_node,
+    reorder_confirmation_node,
+    reorder_request_node,
 )
 from app.nodes.products import (
     clarify_node,
@@ -39,6 +41,8 @@ __all__ = [
     "order_followup_node",
     "cancel_request_node",
     "cancel_confirmation_node",
+    "reorder_request_node",
+    "reorder_confirmation_node",
     # products
     "understand_query_node",
     "clarify_node",
