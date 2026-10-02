@@ -373,7 +373,7 @@ def cancel_confirmation_node(state: GraphState) -> dict:
             "answer": (
                 "✅ **Order cancelled successfully**\n\n"
                 f"Tracking number: **{tracking}**\n"
-                "You will receive an update if a refund is applicable."
+                "Thanks for considering us please remmember us again  "
             )
         }
 
