@@ -47,7 +47,6 @@ ORDER_INTENT_PATTERNS = (
 )
 
 PRODUCT_INTENT_PHRASES = (
-    # direct shopping verbs
     "recommend", "recommend me", "recommend some",
     "suggest", "suggest me", "suggest some",
     "show me", "find me", "find a", "find some", "find any",
@@ -55,7 +54,6 @@ PRODUCT_INTENT_PHRASES = (
     "i want", "i need", "i'd like", "i would like", "i wanna",
     "products", "product", "buy", "shopping", "shop",
     "do you have", "have any", "available", "find me some",
-    # common product nouns
     "watch", "watches",
     "phone", "phones", "mobile", "smartphone",
     "laptop", "laptops", "computer", "pc",
@@ -214,8 +212,17 @@ def is_product_request(message: str) -> bool:
 
 
 def is_cancel_request(message: str) -> bool:
+    """
+    Match "cancel my order", "cancel order X", "cancel ORD-2026-XXXX",
+    "stop this order", etc.
+    """
     text = re.sub(r"\s+", " ", message.lower().strip())
-    return any(re.search(p, text) for p in CANCEL_INTENT_PATTERNS)
+    if any(re.search(p, text) for p in CANCEL_INTENT_PATTERNS):
+        return True
+    # NEW: "cancel ORD-2026-..." / "stop ORD-..." / "cancel 12345"
+    if re.match(r"^(?:cancel|stop)\b", text) and extract_tracking_number(message):
+        return True
+    return False
 
 
 def is_reorder_request(message: str) -> bool:
@@ -228,13 +235,7 @@ def is_reorder_request(message: str) -> bool:
 def _looks_like_price_refinement(question: str) -> bool:
     """
     True if the message is only price words and/or numbers.
-
-    Examples:
-        "under 1000"
-        "5000"
-        "between 500 and 2000"
-        "below rs 500"
-        "cheaper than 3000"
+    Examples: "under 1000", "5000", "between 500 and 2000".
     """
     text = (question or "").strip().lower()
     if not text or not re.search(r"\d", text):
@@ -243,6 +244,24 @@ def _looks_like_price_refinement(question: str) -> bool:
     if not tokens:
         return False
     return all(tok.isdigit() or tok in _PRICE_WORD_TOKENS for tok in tokens)
+
+
+def _looks_like_clarification_answer(question: str) -> bool:
+    """
+    True if the message plausibly answers our last clarification question
+    (short attribute, price, color, brand, category word, etc.).
+    """
+    text = (question or "").strip()
+    if not text:
+        return False
+    words = text.split()
+    if len(words) > 5:
+        return False
+    if len(text) > 40:
+        return False
+    if _looks_like_price_refinement(text):
+        return True
+    return bool(re.fullmatch(r"[A-Za-z][A-Za-z\s\-'&]{0,30}", text))
 
 
 def is_vague_query(question: str) -> bool:
@@ -336,7 +355,6 @@ def load_session_node(state: GraphState) -> dict:
     session_id = state["session_id"]
     session = session_store.get(session_id)
 
-    # Propagate authenticated identity from the API layer into the session.
     incoming_customer_id = state.get("customer_id")
     if incoming_customer_id:
         session.customer_id = incoming_customer_id
@@ -359,47 +377,55 @@ def detect_intent_node(state: GraphState) -> dict:
     session = state["session"]
     question = (state.get("original_question") or "").strip()
 
-    # 1. Cancel confirmation takes priority
+    # ------------------------------------------------------------------
+    # Confirmation states take absolute priority.
+    # ------------------------------------------------------------------
     if session.state == ConversationState.AWAITING_CANCEL_CONFIRMATION:
         return {"intent": Intent.CANCEL_CONFIRMATION.value}
-
-    # 2. Reorder confirmation
     if session.state == ConversationState.AWAITING_REORDER_CONFIRMATION:
         return {"intent": Intent.REORDER_CONFIRMATION.value}
 
-    # 3. Pending clarification → keep in the product pipeline
-    if session.state == ConversationState.AWAITING_CLARIFICATION:
-        return {"intent": Intent.PRODUCT.value}
-
-    # 4. Garbage
+    # ------------------------------------------------------------------
+    # Real intents — these ALWAYS win over a pending clarification.
+    # ------------------------------------------------------------------
     if is_garbage_input(question):
         return {"intent": Intent.GARBAGE.value}
 
-    # 5. Greeting
     greeting = detect_greeting(question)
     if greeting:
         return {"intent": Intent.GREETING.value, "greeting_response": greeting}
 
-    # 6. Cancel
+    # Cancel — including "cancel ORD-2026-XXXX". If a tracking number is
+    # present in the message, hand it to the cancel node directly.
     if is_cancel_request(question):
-        return {"intent": Intent.ORDER_CANCEL.value}
+        result: dict = {"intent": Intent.ORDER_CANCEL.value}
+        tnum = extract_tracking_number(question)
+        if tnum:
+            result["tracking_number"] = tnum
+        return result
 
-    # 7. Reorder — needs a prior order in context
+    # Reorder
     if is_reorder_request(question):
-        if (
-            session.order_data
-            or session.last_order_id
-            or session.tracking_number
-        ):
+        if session.order_data or session.last_order_id or session.tracking_number:
             return {"intent": Intent.ORDER_REORDER.value}
         return {"intent": Intent.ORDER_TRACKING_PROMPT.value}
 
-    # 8. Tracking number present
+    # ------------------------------------------------------------------
+    # Continuation of a cancel flow: we asked for a tracking number and
+    # the user is now supplying it. Keep them in the cancel branch.
+    # ------------------------------------------------------------------
+    if session.state == ConversationState.AWAITING_TRACKING:
+        tnum = extract_tracking_number(question)
+        if tnum:
+            return {"intent": Intent.ORDER_CANCEL.value, "tracking_number": tnum}
+        # User changed topic — drop the pending tracking state.
+        session.state = ConversationState.IDLE
+
+    # Generic tracking number → track
     tnum = extract_tracking_number(question)
     if tnum:
         return {"intent": Intent.ORDER_TRACKING.value, "tracking_number": tnum}
 
-    # 9. Follow-up on an existing order in session
     if session.tracking_number:
         text = question.lower().strip()
         if (
@@ -409,31 +435,38 @@ def detect_intent_node(state: GraphState) -> dict:
         ):
             return {"intent": Intent.ORDER_FOLLOWUP.value}
 
-    # 10. Asked to track but no number yet
     if is_order_tracking_request(question):
         return {"intent": Intent.ORDER_TRACKING_PROMPT.value}
 
-    # 11. Product / vague
+    # ------------------------------------------------------------------
+    # Pending clarification — only NOW, after all real intents are ruled
+    # out, and only if the message looks like an answer to our question.
+    # ------------------------------------------------------------------
+    if session.state == ConversationState.AWAITING_CLARIFICATION:
+        if _looks_like_clarification_answer(question):
+            return {"intent": Intent.PRODUCT.value}
+        session.pending_clarification = None
+        session.pending_slot = None
+        session.state = ConversationState.IDLE
+
+    # Product / vague
     if is_product_request(question) or is_vague_query(question):
         return {"intent": Intent.PRODUCT.value}
 
-    # 12. Refinement of a previous product search.
-    # After a successful search, state is IDLE but session.last_parsed still
-    # holds the category. A bare "under 1000", "5000", or "between 500 and 2000"
-    # must stay in the product pipeline, not fall through to RAG.
+    # Price refinement of a previous successful search
     last_parsed = session.last_parsed or {}
     has_prior_product_context = bool(
         last_parsed.get("category") or last_parsed.get("product_name")
     )
     if has_prior_product_context and _looks_like_price_refinement(question):
         logger.info(
-            "intent: price refinement detected | prior_category=%s | q=%r",
+            "intent: price refinement | prior_category=%s | q=%r",
             last_parsed.get("category") or last_parsed.get("product_name"),
             question,
         )
         return {"intent": Intent.PRODUCT.value}
 
-    # 13. Default → POLICY (RAG)
+    # Default → POLICY (RAG)
     return {"intent": Intent.POLICY.value}
 
 
@@ -470,3 +503,4 @@ __all__ = [
     "REORDER_CONFIRM_NO",
     "_contains_phrase",
 ]
+# cancel ORD-2026-V9RLRTUZ
